@@ -20,12 +20,10 @@
     "README.md",
     "bin",
     "index.d.ts",
-    "server",
     "src"
   ],
   "scripts": {
-    "test": "node --test 'test/*.test.mjs'",
-    "serve": "node server/build.mjs && node server/node.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@scure/starknet": "^2.4.0"

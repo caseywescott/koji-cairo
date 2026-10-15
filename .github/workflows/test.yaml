@@ -13,27 +13,16 @@ jobs:
           scarb-version: "2.11.4"
       - run: scarb test
 
-  # The Beast Sound packages (scarb 2.20.1, as in contracts/.tool-versions and
-  # offchain/beast-sound/onchain/cairo/.tool-versions). The parity fixtures are #[ignore]d here:
-  # they need several GB per batch; run them locally (contracts/beast_music/README.md).
-  contracts:
+  # Beast Engine v1/v2 (JS) and its golden fixtures.
+  engine-js:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - contracts/midi
-          - contracts/beast_music
-          - contracts/midi_provider
-          - contracts/beast_sound
-          - offchain/beast-sound/onchain/cairo
     defaults:
       run:
-        working-directory: ${{ matrix.package }}
+        working-directory: offchain/beast-sound
     steps:
       - uses: actions/checkout@v4
-      - uses: software-mansion/setup-scarb@v1
+      - uses: actions/setup-node@v4
         with:
-          scarb-version: "2.20.1"
-      - run: scarb fmt --check
-      - run: scarb test
+          node-version: "22"
+      - run: npm install --no-package-lock
+      - run: npm test

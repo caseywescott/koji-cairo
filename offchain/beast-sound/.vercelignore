@@ -1,7 +1,0 @@
-node_modules
-test
-scripts
-bin
-*.mid
-onchain/cairo
-onchain/.gallery-cache.json
