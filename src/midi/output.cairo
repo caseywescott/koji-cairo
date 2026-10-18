@@ -171,76 +171,179 @@ pub fn output_midi_object(midi: @Midi) -> Array<u8> {
     output.get_data()
 }
 
-fn write_variable_length(mut value: u32, ref output: MidiOutput) {
-    if value == 0 {
-        output.append_byte(0);
-        return;
+/// A MIDI variable-length quantity, big-endian 7-bit groups with the continuation bit on all but
+/// the last. Nearly every delta is 1 or 2 bytes, so those two are straight-line code; the longer
+/// forms are a loop on purpose, because a function without a loop is charged for its most
+/// expensive path on every call.
+fn write_variable_length(value: u32, ref output: MidiOutput) {
+    if value < 0x80 {
+        output.append_byte(value.try_into().unwrap());
+    } else if value < 0x4000 {
+        let (high, low) = DivRem::div_rem(value, 0x80);
+        output.append_byte((0x80 + high).try_into().unwrap());
+        output.append_byte(low.try_into().unwrap());
+    } else {
+        // the place of the highest group: 128^2 to 128^4 (a u32 needs up to five groups)
+        let mut place: u32 = 0x4000;
+        while value / place >= 0x80 {
+            place *= 0x80;
+        };
+        let mut rest = value;
+        while place > 1 {
+            let (group, below) = DivRem::div_rem(rest, place.try_into().unwrap());
+            output.append_byte((0x80 + group).try_into().unwrap());
+            rest = below;
+            place /= 0x80;
+        };
+        output.append_byte(rest.try_into().unwrap());
     }
+}
 
-    let mut buffer = ArrayTrait::new();
-
-    // Build variable length encoding
-    buffer.append((value % 128).try_into().unwrap());
-    value = value / 128;
-
-    loop {
-        if value == 0 {
-            break;
-        }
-        buffer.append(((value % 128) + 128).try_into().unwrap());
-        value = value / 128;
-    }
-
-    // Write bytes in reverse order (manually reverse the array)
-    let mut reversed = ArrayTrait::new();
-    loop {
-        match buffer.pop_front() {
-            Option::Some(byte) => { reversed.append(byte); },
-            Option::None => { break; },
-        }
-    }
-
-    // Now append in reverse order
-    let mut i = reversed.len();
-    loop {
-        if i == 0 {
-            break;
-        }
-        i -= 1;
-        match reversed.get(i) {
-            Option::Some(byte) => { output.append_byte(*byte.unbox()); },
-            Option::None => {},
-        }
-    }
+/// 31 bytes as one big-endian word. Straight-line: a loop pays a call, a gas check and a checked
+/// counter per byte; this is two steps a byte.
+#[cairofmt::skip]
+fn pack_word(chunk: Box<[u8; 31]>) -> felt252 {
+    let [
+        b0, b1, b2, b3, b4, b5, b6, b7,
+        b8, b9, b10, b11, b12, b13, b14, b15,
+        b16, b17, b18, b19, b20, b21, b22, b23,
+        b24, b25, b26, b27, b28, b29, b30,
+    ] = chunk.unbox();
+    let word: felt252 = b0.into();
+    let word = word * 0x100 + b1.into();
+    let word = word * 0x100 + b2.into();
+    let word = word * 0x100 + b3.into();
+    let word = word * 0x100 + b4.into();
+    let word = word * 0x100 + b5.into();
+    let word = word * 0x100 + b6.into();
+    let word = word * 0x100 + b7.into();
+    let word = word * 0x100 + b8.into();
+    let word = word * 0x100 + b9.into();
+    let word = word * 0x100 + b10.into();
+    let word = word * 0x100 + b11.into();
+    let word = word * 0x100 + b12.into();
+    let word = word * 0x100 + b13.into();
+    let word = word * 0x100 + b14.into();
+    let word = word * 0x100 + b15.into();
+    let word = word * 0x100 + b16.into();
+    let word = word * 0x100 + b17.into();
+    let word = word * 0x100 + b18.into();
+    let word = word * 0x100 + b19.into();
+    let word = word * 0x100 + b20.into();
+    let word = word * 0x100 + b21.into();
+    let word = word * 0x100 + b22.into();
+    let word = word * 0x100 + b23.into();
+    let word = word * 0x100 + b24.into();
+    let word = word * 0x100 + b25.into();
+    let word = word * 0x100 + b26.into();
+    let word = word * 0x100 + b27.into();
+    let word = word * 0x100 + b28.into();
+    let word = word * 0x100 + b29.into();
+    let word = word * 0x100 + b30.into();
+    word
 }
 
 /// Pack raw MIDI bytes for RPC transport (Koji PRD v0.2 §5.2).
 /// Element `[0]` is `midi_bytes.len()`; each subsequent felt packs up to 31 bytes big-endian.
 /// Must match `frontend/lib/packMidiToFelts.ts` and `deserializeFeltsToMidi`.
-pub fn to_felt252_array(mut midi_bytes: Array<u8>) -> Array<felt252> {
-    let mut result: Array<felt252> = ArrayTrait::new();
-    let total_len = midi_bytes.len();
-    result.append(total_len.into());
-
-    let mut i: usize = 0;
-    loop {
-        if i >= total_len {
-            break;
-        }
-        let mut val: u256 = 0;
-        let mut j: usize = 0;
-        loop {
-            if j >= 31 {
-                break;
-            }
-            if i + j >= total_len {
-                break;
-            }
-            val = val * 256_u256 + (*midi_bytes.at(i + j)).into();
-            j += 1;
-        };
-        result.append(val.try_into().unwrap());
-        i += 31;
+pub fn to_felt252_array(midi_bytes: Array<u8>) -> Array<felt252> {
+    let mut bytes = midi_bytes.span();
+    let mut result: Array<felt252> = array![bytes.len().into()];
+    while let Option::Some(chunk) = bytes.multi_pop_front::<31>() {
+        result.append(pack_word(*chunk));
     };
+    if bytes.len() != 0 {
+        let mut word: felt252 = 0;
+        while let Option::Some(byte) = bytes.pop_front() {
+            word = word * 0x100 + (*byte).into();
+        };
+        result.append(word);
+    }
     result
+}
+
+/// The writer and the packer against their original definitions.
+#[cfg(test)]
+mod tests {
+    use super::{MidiOutput, MidiOutputTrait, to_felt252_array, write_variable_length};
+
+    fn reference_vlq(mut value: u32) -> Array<u8> {
+        if value == 0 {
+            return array![0];
+        }
+        let mut groups: Array<u8> = array![(value % 128).try_into().unwrap()];
+        value = value / 128;
+        while value != 0 {
+            groups.append(((value % 128) + 128).try_into().unwrap());
+            value = value / 128;
+        };
+        let mut out: Array<u8> = array![];
+        let mut i = groups.len();
+        while i != 0 {
+            i -= 1;
+            out.append(*groups.at(i));
+        };
+        out
+    }
+
+    fn reference_pack(bytes: Array<u8>) -> Array<felt252> {
+        let total = bytes.len();
+        let mut out: Array<felt252> = array![total.into()];
+        let mut i: u32 = 0;
+        while i < total {
+            let mut val: u256 = 0;
+            let mut j: u32 = 0;
+            while j < 31 && i + j < total {
+                val = val * 256 + (*bytes.at(i + j)).into();
+                j += 1;
+            };
+            out.append(val.try_into().unwrap());
+            i += 31;
+        };
+        out
+    }
+
+    #[test]
+    #[available_gas(100000000000)]
+    fn variable_length_is_the_original() {
+    let mut vals: Array<u32> = array![];
+    let mut v: u32 = 0;
+    while v <= 0x4100 {
+        vals.append(v);
+        v += 1;
+    };
+    // every length boundary, and a spread across the whole range
+    for b in array![0x1fffff_u32, 0x200000, 0x200001, 0xfffffff, 0x10000000, 0x10000001, 0x7fffffff, 0xffffffff] {
+        vals.append(b);
+    };
+    let mut x: u32 = 0x4101;
+    while x < 0x50000000 {
+        vals.append(x);
+        x = x * 3 + 7;
+    };
+        for value in vals {
+            let mut out: MidiOutput = MidiOutputTrait::new();
+            write_variable_length(value, ref out);
+            assert!(out.get_data() == reference_vlq(value));
+        };
+    }
+
+    #[test]
+    #[available_gas(100000000000)]
+    fn packing_is_the_original() {
+        let mut n: u32 = 0;
+        while n <= 130 {
+            let mut a: Array<u8> = array![];
+            let mut b: Array<u8> = array![];
+            let mut j: u32 = 0;
+            while j < n {
+                let byte: u8 = ((j * 151 + n * 7 + 3) % 256).try_into().unwrap();
+                a.append(byte);
+                b.append(byte);
+                j += 1;
+            };
+            assert!(to_felt252_array(a) == reference_pack(b));
+            n += 1;
+        };
+    }
 }

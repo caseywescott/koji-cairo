@@ -18,8 +18,8 @@ use koji::composition::beast_trait_map::{
     map_beast_traits_to_composition_params, weakness_section_b_shift,
 };
 use koji::composition::countersubject::{
-    default_countersubject_config, generate_countersubject, countersubject_invertible,
-    countersubject_to_note_events,
+    Countersubject, default_countersubject_config, generate_countersubject,
+    countersubject_invertible, countersubject_to_note_events,
 };
 use koji::composition::invertible_counterpoint::{
     ic_pair_safe, generate_invertible_melodic_canon_mode,
@@ -347,6 +347,37 @@ pub fn build_beast_section(
     section_id: u8,
     section_offset: u32,
 ) -> Array<NoteEvent> {
+    build_beast_section_with(params, theme, section_id, section_offset, beast_countersubject(params, theme))
+}
+
+/// The countersubject's degrees and whether they are invertible against the theme, or none when
+/// the Beast has no countersubject. They depend on the theme and the seed only (the octave, mode,
+/// tonic and time unit just ride along to realize them), so a form makes them once for all its
+/// sections instead of once per section.
+fn beast_countersubject(params: BeastCompositionParams, theme: @BeastTheme) -> Option<(Span<i32>, bool)> {
+    if !params.use_countersubject {
+        return Option::None;
+    }
+    let cs = generate_countersubject(
+        theme.degrees.span(),
+        @default_countersubject_config(),
+        hash2(params.name_variant_id.into(), params.species_id.into()),
+        7,
+        canonical_to_melodic_mode(params.mode_id),
+        params.tonic_keynum,
+        BEAST_TIME_UNIT,
+    );
+    let invertible = countersubject_invertible(theme.degrees.span(), @cs);
+    Option::Some((cs.degrees.span(), invertible))
+}
+
+fn build_beast_section_with(
+    params: BeastCompositionParams,
+    theme: @BeastTheme,
+    section_id: u8,
+    section_offset: u32,
+    countersubject: Option<(Span<i32>, bool)>,
+) -> Array<NoteEvent> {
     let mut out: Array<NoteEvent> = ArrayTrait::new();
     let tonic = transposed_tonic(params.tonic_keynum, section_tonic_shift(params, section_id));
     let mode = canonical_to_melodic_mode(params.mode_id);
@@ -399,17 +430,16 @@ pub fn build_beast_section(
         };
         v += 1;
     };
-    if params.use_countersubject {
-        let cs = generate_countersubject(
-            theme.degrees.span(),
-            @default_countersubject_config(),
-            hash2(params.name_variant_id.into(), params.species_id.into()),
-            7,
-            mode,
-            tonic,
-            unit,
-        );
-        if countersubject_invertible(theme.degrees.span(), @cs) {
+    if let Option::Some((degrees, invertible)) = countersubject {
+        if invertible {
+            // realized in this section's key
+            let mut degs: Array<i32> = ArrayTrait::new();
+            for d in degrees {
+                degs.append(*d);
+            };
+            let cs = Countersubject {
+                degrees: degs, octave: 7, mode_id: mode, tonic_keynum: tonic, time_unit: unit,
+            };
             let cs_events = countersubject_to_note_events(@cs, 0, params.voice_count);
             let shifted = apply_section_offset(cs_events.span(), section_offset);
             append_events(ref out, shifted.span());
@@ -433,12 +463,13 @@ pub fn build_beast_form(params: BeastCompositionParams, sound_seed: felt252) -> 
     let theme = build_beast_theme(params, seeds.motif_seed);
     let mut events: Array<NoteEvent> = ArrayTrait::new();
     let dur = section_duration(theme.degrees.len(), params);
+    let countersubject = beast_countersubject(params, @theme);
     let mut s: u8 = 0;
     loop {
         if s >= params.section_count {
             break;
         }
-        let section = build_beast_section(params, @theme, s, s.into() * dur);
+        let section = build_beast_section_with(params, @theme, s, s.into() * dur, countersubject);
         append_events(ref events, section.span());
         s += 1;
     };

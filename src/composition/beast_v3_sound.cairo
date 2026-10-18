@@ -523,14 +523,34 @@ pub fn v3_params_hash(beast: PackableBeastV3, live: BeastV3LiveState) -> felt252
 // Byte-identical to `toMidiFile` in web/beast_sound/engine.js.
 
 fn push_u32_be(ref out: Array<u8>, v: u32) {
-    out.append(((v / 0x1000000) % 256).try_into().unwrap());
-    out.append(((v / 0x10000) % 256).try_into().unwrap());
-    out.append(((v / 0x100) % 256).try_into().unwrap());
-    out.append((v % 256).try_into().unwrap());
+    let (b3, rest) = DivRem::div_rem(v, 0x1000000);
+    let (b2, rest) = DivRem::div_rem(rest, 0x10000);
+    let (b1, b0) = DivRem::div_rem(rest, 0x100);
+    out.append(b3.try_into().unwrap());
+    out.append(b2.try_into().unwrap());
+    out.append(b1.try_into().unwrap());
+    out.append(b0.try_into().unwrap());
 }
 
 fn push_vlq(ref out: Array<u8>, v: u32) {
-    // Up to 4 bytes covers every delta below 2^28 ticks.
+    // Nearly every delta is 1 or 2 bytes: those are straight-line code, so they no longer pay for
+    // the 3 and 4 byte forms below (a function is charged for its most expensive path).
+    if v < 0x80 {
+        out.append(v.try_into().unwrap());
+        return;
+    }
+    if v < 0x4000 {
+        let (high, low) = DivRem::div_rem(v, 0x80);
+        out.append((0x80 + high).try_into().unwrap());
+        out.append(low.try_into().unwrap());
+        return;
+    }
+    push_vlq_long(ref out, v);
+}
+
+// Up to 4 bytes covers every delta below 2^28 ticks (above that the top group wraps, as before).
+#[inline(never)]
+fn push_vlq_long(ref out: Array<u8>, v: u32) {
     if v >= 0x200000 {
         out.append((0x80 + (v / 0x200000) % 128).try_into().unwrap());
     }
@@ -883,4 +903,59 @@ pub fn v3_score_instructions(beast: PackableBeastV3, live: BeastV3LiveState) -> 
     let params = map_v3_beast_to_composition_params(beast, live);
     let form = build_beast_form(params, beast_sound_seed(beast.id, beast.prefix, beast.suffix));
     beast_form_to_bsi_felts(@form, params.tempo_us)
+}
+
+/// The SMF helpers against their original definitions.
+#[cfg(test)]
+mod smf_helper_tests {
+    use super::{push_u32_be, push_vlq};
+
+    fn reference_vlq(v: u32) -> Array<u8> {
+        let mut out: Array<u8> = array![];
+        if v >= 0x200000 {
+            out.append((0x80 + (v / 0x200000) % 128).try_into().unwrap());
+        }
+        if v >= 0x4000 {
+            out.append((0x80 + (v / 0x4000) % 128).try_into().unwrap());
+        }
+        if v >= 0x80 {
+            out.append((0x80 + (v / 0x80) % 128).try_into().unwrap());
+        }
+        out.append((v % 128).try_into().unwrap());
+        out
+    }
+
+    #[test]
+    #[available_gas(100000000000)]
+    fn push_vlq_is_the_original() {
+    let mut vals: Array<u32> = array![];
+    let mut v: u32 = 0;
+    while v <= 0x4100 {
+        vals.append(v);
+        v += 1;
+    };
+    // every length boundary, and a spread across the whole range
+    for b in array![0x1fffff_u32, 0x200000, 0x200001, 0xfffffff, 0x10000000, 0x10000001, 0x7fffffff, 0xffffffff] {
+        vals.append(b);
+    };
+    let mut x: u32 = 0x4101;
+    while x < 0x50000000 {
+        vals.append(x);
+        x = x * 3 + 7;
+    };
+        for value in vals {
+            let mut out: Array<u8> = array![];
+            push_vlq(ref out, value);
+            assert!(out == reference_vlq(value));
+            let mut be: Array<u8> = array![];
+            push_u32_be(ref be, value);
+            assert!(
+                be == array![
+                    ((value / 0x1000000) % 256).try_into().unwrap(),
+                    ((value / 0x10000) % 256).try_into().unwrap(),
+                    ((value / 0x100) % 256).try_into().unwrap(), (value % 256).try_into().unwrap(),
+                ],
+            );
+        };
+    }
 }

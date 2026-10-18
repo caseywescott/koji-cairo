@@ -65,6 +65,16 @@ pub struct Countersubject {
 // ─────────────────────────────────────────────────────────────
 
 /// Candidate CS steps at position p: consonant against the subject, IC-safe, ≤ max_step.
+/// Whether a CS degree may sound against the subject's: consonant and, with `enforce_ic`, not a
+/// diatonic fifth. Both rules read the same interval class, `|cs_deg - subject_deg| % 7`
+/// (`generic_class`, and `diatonic_class` of the same difference): consonant is 0, 2, 4 or 5, and
+/// the fifth is 4. The subtraction and the absolute value are checked as in those.
+#[inline(always)]
+fn cs_allowed(cs_deg: i32, subject_deg: i32, enforce_ic: bool) -> bool {
+    let cls = abs_i32(cs_deg - subject_deg) % 7;
+    cls == 0 || cls == 2 || cls == 5 || (cls == 4 && !enforce_ic)
+}
+
 fn cs_candidates(
     cs_cur: i32,
     subject_next: i32,
@@ -75,30 +85,25 @@ fn cs_candidates(
 ) -> Array<i32> {
     let mut out: Array<i32> = ArrayTrait::new();
     let max_s: i32 = max_step.try_into().unwrap();
-    let mut m: i32 = -max_s;
-    loop {
-        if m > max_s {
-            break;
+    // only the steps -max_s..=max_s that land in the register band lo..=hi
+    let lowest = cs_cur + -max_s;
+    let highest = cs_cur + max_s;
+    let first = if lowest > lo {
+        lowest
+    } else {
+        lo
+    };
+    let last = if highest < hi {
+        highest
+    } else {
+        hi
+    };
+    let mut cs_next = first;
+    while cs_next <= last {
+        if cs_allowed(cs_next, subject_next, enforce_ic) {
+            out.append(cs_next - cs_cur);
         }
-        let cs_next = cs_cur + m;
-        // 1. Register band
-        if cs_next < lo || cs_next > hi {
-            m += 1;
-            continue;
-        }
-        // 2. Consonant against subject
-        let cls = generic_class(cs_next, subject_next);
-        if !is_consonant_class(cls) {
-            m += 1;
-            continue;
-        }
-        // 3. IC constraint: no diatonic P5 vertical
-        if enforce_ic && !diatonic_ic_safe(cs_next, subject_next) {
-            m += 1;
-            continue;
-        }
-        out.append(m);
-        m += 1;
+        cs_next += 1;
     };
     out
 }
@@ -106,17 +111,7 @@ fn cs_candidates(
 fn cs_degree_valid(
     cs_deg: i32, subject_deg: i32, enforce_ic: bool, lo: i32, hi: i32,
 ) -> bool {
-    if cs_deg < lo || cs_deg > hi {
-        return false;
-    }
-    let cls = generic_class(cs_deg, subject_deg);
-    if !is_consonant_class(cls) {
-        return false;
-    }
-    if enforce_ic && !diatonic_ic_safe(cs_deg, subject_deg) {
-        return false;
-    }
-    true
+    cs_deg >= lo && cs_deg <= hi && cs_allowed(cs_deg, subject_deg, enforce_ic)
 }
 
 fn nearest_safe_cs_degree(
@@ -415,4 +410,84 @@ pub fn countersubject_conjunct(cs: @Countersubject, max_step: u32) -> bool {
         i += 1;
     };
     ok
+}
+
+/// The candidate and degree checks against the original: `generic_class`, `is_consonant_class` and
+/// `diatonic_ic_safe` one after the other, over every step in `-max_step..=max_step`.
+#[cfg(test)]
+mod candidate_tests {
+    use koji::composition::canon_rules::{generic_class, is_consonant_class};
+    use koji::composition::invertible_counterpoint::diatonic_ic_safe;
+    use super::{cs_candidates, cs_degree_valid};
+
+    fn reference_degree_valid(cs_deg: i32, subject_deg: i32, enforce_ic: bool, lo: i32, hi: i32) -> bool {
+        if cs_deg < lo || cs_deg > hi {
+            return false;
+        }
+        if !is_consonant_class(generic_class(cs_deg, subject_deg)) {
+            return false;
+        }
+        !(enforce_ic && !diatonic_ic_safe(cs_deg, subject_deg))
+    }
+
+    fn reference_candidates(
+        cs_cur: i32, subject_next: i32, max_step: u32, enforce_ic: bool, lo: i32, hi: i32,
+    ) -> Array<i32> {
+        let mut out: Array<i32> = array![];
+        let max_s: i32 = max_step.try_into().unwrap();
+        let mut m: i32 = -max_s;
+        while m <= max_s {
+            if reference_degree_valid(cs_cur + m, subject_next, enforce_ic, lo, hi) {
+                out.append(m);
+            }
+            m += 1;
+        };
+        out
+    }
+
+    /// Positions in and out of the band, subjects well past it, the generator's steps (3, and 14 to
+    /// relax them) and none, and the bands: ±7, a narrow one, one degree, none.
+    #[test]
+    #[available_gas(100000000000)]
+    fn candidates_are_the_original() {
+        let bands = array![(-7_i32, 7_i32), (-2, 4), (0, 0), (3, -3)];
+        let mut cs_cur: i32 = -8;
+        while cs_cur <= 8 {
+            let mut subject: i32 = -14;
+            while subject <= 14 {
+                for max_step in array![0_u32, 3, 14] {
+                    for enforce_ic in array![true, false] {
+                        for band in bands.span() {
+                            let (lo, hi) = *band;
+                            assert!(
+                                cs_candidates(cs_cur, subject, max_step, enforce_ic, lo, hi)
+                                    == reference_candidates(cs_cur, subject, max_step, enforce_ic, lo, hi),
+                            );
+                        };
+                    };
+                };
+                subject += 1;
+            };
+            cs_cur += 1;
+        };
+    }
+
+    #[test]
+    #[available_gas(100000000000)]
+    fn degree_validity_is_the_original() {
+        let mut cs_deg: i32 = -9;
+        while cs_deg <= 9 {
+            let mut subject: i32 = -16;
+            while subject <= 16 {
+                for enforce_ic in array![true, false] {
+                    assert!(
+                        cs_degree_valid(cs_deg, subject, enforce_ic, -7, 7)
+                            == reference_degree_valid(cs_deg, subject, enforce_ic, -7, 7),
+                    );
+                };
+                subject += 1;
+            };
+            cs_deg += 1;
+        };
+    }
 }
