@@ -55,3 +55,4 @@ pub mod stretto;
 pub mod countersubject;
 pub mod compound_melody;
 pub mod transformational_counterpoint;
+pub mod cyclic_transform;
