@@ -148,6 +148,25 @@ pub fn snap_events(events: Span<NoteEvent>, tonic_pc: u8, mask: u16) -> Array<No
     out
 }
 
+/// Like `snap_events`, but a tie resolves toward the previous snapped note (smaller motion, as a
+/// contraction intends); the first note's tie goes down.
+pub fn snap_events_smooth(events: Span<NoteEvent>, tonic_pc: u8, mask: u16) -> Array<NoteEvent> {
+    let mut out = ArrayTrait::new();
+    let mut prev: Option<i32> = Option::None;
+    for e in events {
+        let p: i32 = (*e.pitch).into();
+        let prefer = match prev {
+            Option::Some(q) => sign(q - p),
+            Option::None => 0,
+        };
+        let mut n = *e;
+        n.pitch = clamp_keynum(snap_pitch(p, tonic_pc, mask, prefer));
+        prev = Option::Some(n.pitch.into());
+        out.append(n);
+    };
+    out
+}
+
 // ─────────────────────────────────────────────────────────────
 // Affine family
 // ─────────────────────────────────────────────────────────────
@@ -451,8 +470,8 @@ pub const CYCLIC_TPQ: u32 = 4;
 
 /// Ravel-like cycle: [movement 1 = the theme, finale = the affine image re-barred 3+2].
 /// Finale: intervals × 2/3 about the first note, down a minor third (F → D), snapped back into
-/// D natural minor so contraction stays diatonic, one 4/4 bar (16 ticks) → 5/8 of 3+2 eighths
-/// (6 + 4 ticks), velocity × 3/2 + 10.
+/// D natural minor so contraction stays diatonic (ties toward the previous note), one 4/4 bar
+/// (16 ticks) → 5/8 of 3+2 eighths (6 + 4 ticks), velocity × 3/2 + 10.
 pub fn ravel_cycle(theme: Span<NoteEvent>) -> Array<Array<NoteEvent>> {
     let mut out = ArrayTrait::new();
     out.append(copy(theme));
@@ -475,7 +494,7 @@ pub fn ravel_cycle(theme: Span<NoteEvent>) -> Array<Array<NoteEvent>> {
     };
     let moved = affine_map(theme, m);
     let tonic_pc: u8 = ((center.into() + 9_u32) % 12).try_into().unwrap(); // a minor third below
-    let diatonic = snap_events(moved.span(), tonic_pc, MASK_NATURAL_MINOR);
+    let diatonic = snap_events_smooth(moved.span(), tonic_pc, MASK_NATURAL_MINOR);
     let groups = array![6_u32, 4];
     out.append(meter_warp(diatonic.span(), 4 * CYCLIC_TPQ, groups.span()));
     out

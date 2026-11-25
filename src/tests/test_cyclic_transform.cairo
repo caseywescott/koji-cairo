@@ -1,8 +1,9 @@
 use koji::composition::cyclic_transform::{
-    AffineMap, MASK_MAJOR, MASK_WHOLE_TONE, affine_identity, affine_map, affine_pitch, contour,
-    cycle_to_midi, cyclic_laws_hold, debussy_cycle, demo_theme, dilate_fragment, events_equal,
-    homeomorph, in_pc_set, interval_vector, meter_warp, meter_warp_tick, pointillize, ravel_cycle,
-    same_contour, snap_pitch, time_scale,
+    AffineMap, MASK_MAJOR, MASK_NATURAL_MINOR, MASK_WHOLE_TONE, affine_identity, affine_map,
+    affine_pitch, contour, cycle_to_midi, cyclic_laws_hold, debussy_cycle, demo_theme,
+    dilate_fragment, events_equal, homeomorph, in_pc_set, interval_vector, meter_warp,
+    meter_warp_tick, pointillize, ravel_cycle, same_contour, snap_events_smooth, snap_pitch,
+    time_scale,
 };
 use koji::composition::melodic_canon::NoteEvent;
 use koji::midi::output::output_midi_object;
@@ -181,9 +182,24 @@ fn ravel_cycle_finale() {
     assert!(events_equal(c.at(0).span(), t.span()));
     let fin = c.at(1).span();
     // contracted ×2/3 about F4, down a minor third, snapped into D natural minor
-    assert_eq!(pitches(fin), array![62, 65, 67, 65, 65, 62, 62]); // Eb ties D/E, ties go down
+    assert_eq!(pitches(fin), array![62, 65, 67, 65, 65, 64, 62]); // Eb ties D/E → E, toward F
     assert_eq!(onsets(fin), array![0, 3, 6, 9, 10, 13, 16]);
     assert_eq!(*fin.at(0).velocity, 106);
+}
+
+fn mk(p: u8, i: u32) -> NoteEvent {
+    NoteEvent { time: i, duration: 1, pitch: p, velocity: 64, voice_id: 0 }
+}
+
+#[test]
+fn smooth_snap_ties_toward_previous() {
+    // D natural minor: Eb (63) ties D/E; after F it goes to E, after C it goes to D
+    let a = array![mk(65, 0), mk(63, 1)];
+    assert_eq!(pitches(snap_events_smooth(a.span(), 2, MASK_NATURAL_MINOR).span()), array![65, 64]);
+    let b = array![mk(60, 0), mk(63, 1)];
+    assert_eq!(pitches(snap_events_smooth(b.span(), 2, MASK_NATURAL_MINOR).span()), array![60, 62]);
+    let c = array![mk(63, 0)];
+    assert_eq!(pitches(snap_events_smooth(c.span(), 2, MASK_NATURAL_MINOR).span()), array![62]);
 }
 
 #[test]

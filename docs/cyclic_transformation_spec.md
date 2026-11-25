@@ -36,7 +36,8 @@ into a 5/8 bar grouped 3+2 (beats 1–2 fill the long pulse, beats 3–4 the sho
 2+3. The warp is monotone, so order and overlaps survive.
 
 `ravel_cycle(theme)` returns `[theme, finale]`; the finale contracts intervals × 2/3 about the
-first note, moves down a minor third, snaps into that natural minor, re-bars 4/4 → 3+2 and plays
+first note, moves down a minor third, snaps into that natural minor (`snap_events_smooth`: a
+note halfway between two scale notes goes toward the previous note), re-bars 4/4 → 3+2 and plays
 louder (× 3/2 + 10).
 
 ## Cellular family (Debussy-like)
